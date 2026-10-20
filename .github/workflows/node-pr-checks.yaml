@@ -144,17 +144,15 @@ jobs:
           file: ${{ matrix.image.dockerfile }}
           target: ${{ matrix.image.target }}
           load: true
-          tags: scan/${{ matrix.image.name }}:pr
+          tags: scan/image:pr     # one image per job; names like "." are not valid tags
           cache-from: type=gha,scope=${{ matrix.image.name }}-amd64
       - name: Trivy image (fixable HIGH/CRITICAL block)
-        env:
-          IMAGE_NAME: ${{ matrix.image.name }}
         run: |
           touch .trivyignore
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD/.trivyignore:/.trivyignore:ro" "$TRIVY_IMAGE" image \
             --ignorefile /.trivyignore --ignore-unfixed --severity HIGH,CRITICAL \
-            --exit-code 1 "scan/$IMAGE_NAME:pr"
+            --exit-code 1 scan/image:pr
 
   all-checks-passed:
     if: always()
