@@ -19,7 +19,7 @@ on:
 permissions: { contents: read, packages: write, id-token: write }
 jobs:
   delivery:
-    uses: KAMAHORO123/rssb-devops/.github/workflows/node-delivery.yaml@v1.0.0
+    uses: KAMAHORO123/rssb-devops/.github/workflows/node-delivery.yaml@v1.2.0
     with:
       images: '[{"name":".","context":".","dockerfile":"Dockerfile","target":"runtime","app":"orders-api"}]'
       gitops-repo: KAMAHORO123/platform-gitops

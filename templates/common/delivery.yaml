@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   delivery:
-    uses: KAMAHORO123/rssb-devops/.github/workflows/node-delivery.yaml@v1.0.1
+    uses: KAMAHORO123/rssb-devops/.github/workflows/node-delivery.yaml@v1.2.0
     with:
       gitops-repo: __GITOPS_REPO__
       images: '[{"name": ".", "context": ".", "dockerfile": "Dockerfile", "target": "runtime", "app": "__NAME__"}]'
