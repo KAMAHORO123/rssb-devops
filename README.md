@@ -29,3 +29,15 @@ jobs:
 
 Secrets are passed explicitly (never `secrets: inherit`). Scanners run from
 digest-pinned images; every action is pinned by commit SHA.
+
+## Onboard another app (one command)
+
+```bash
+scripts/onboard-app.sh --name orders-api --type nestjs \
+  --app-dir ~/code/orders-api --gitops-dir ~/code/platform-gitops [--port 3000] [--database]
+```
+
+Copies the hardened Dockerfile (`templates/nestjs|nextjs`), ignore files, scanner
+configs, the two caller workflows and Dependabot (7-day cooldown) into the app repo,
+and writes `apps/<name>/base` + `envs/{uat,staging,prod}` into the GitOps repo.
+Never overwrites existing files.

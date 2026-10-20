@@ -1,0 +1,25 @@
+# After a merge: build once, scan, push, sign, record the digest in
+# platform-gitops (develop -> uat, staging -> staging, main -> prod after approval).
+name: Delivery
+
+on:
+  push:
+    branches: [develop, staging, main]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: delivery-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  delivery:
+    uses: KAMAHORO123/rssb-devops/.github/workflows/node-delivery.yaml@v1.0.1
+    with:
+      gitops-repo: __GITOPS_REPO__
+      images: '[{"name": ".", "context": ".", "dockerfile": "Dockerfile", "target": "runtime", "app": "__NAME__"}]'
+    secrets:
+      gitops-deploy-key: ${{ secrets.CONFIG_REPO_DEPLOY_KEY }}

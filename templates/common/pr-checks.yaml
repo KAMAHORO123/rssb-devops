@@ -1,0 +1,20 @@
+# Security and quality gates on every pull request, from the central DevOps
+# repo (pinned release). Branch protection requires "checks / all-checks-passed".
+name: PR checks
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    uses: KAMAHORO123/rssb-devops/.github/workflows/node-pr-checks.yaml@v1.0.1
+    with:
+      images: '[{"name": ".", "context": ".", "dockerfile": "Dockerfile", "target": "runtime"}]'
