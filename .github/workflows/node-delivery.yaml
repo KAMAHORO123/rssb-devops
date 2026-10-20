@@ -237,7 +237,9 @@ jobs:
             name=$(echo "$img" | jq -r .name); app=$(echo "$img" | jq -r .app)
             image="$PREFIX/$name"; [ "$name" = "." ] && image="$PREFIX"
             digest=$(docker buildx imagetools inspect "$image:$TAG" --format '{{json .Manifest}}' | jq -r .digest)
-            file="apps/$app/envs/$ENV_NAME/kustomization.yaml"
+            # Helm values file (or a Kustomize overlay): same "images:" list either way.
+            file="apps/$app/envs/$ENV_NAME/values.yaml"
+            [ -f "$file" ] || file="apps/$app/envs/$ENV_NAME/kustomization.yaml"
             # Replace the digest (or placeholder tag) on the line after "- name: <image>".
             python3 - "$file" "$image" "$digest" <<'PY'
           import re, sys
