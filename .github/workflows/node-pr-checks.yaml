@@ -1,0 +1,169 @@
+# Reusable PR checks for RSSB Node.js apps (plan v3.2 §6.2, §9.1). Apps call
+# it from a ~10-line workflow pinned to a release tag (D12, D22).
+#
+#   stage 1  secrets (Gitleaks) · dockerfile-lint (hadolint)
+#   stage 2  sast (Semgrep) · dependencies (Trivy fs) · test (per project)
+#   stage 3  image-scan (build + Trivy image, nothing pushed)
+#   gate     all-checks-passed   <- the one check branch protection requires
+#
+# Scanners run from digest-pinned images, never third-party wrapper actions
+# (trivy-action was hijacked in March 2026). Fixable HIGH/CRITICAL findings
+# block; accepted risks go in .trivyignore with a reason and an expiry date.
+
+name: node-pr-checks
+
+on:
+  workflow_call:
+    inputs:
+      projects:
+        description: 'JSON list of Node project folders to test, e.g. ["backend","frontend"] or ["."]'
+        type: string
+        default: '["."]'
+      images:
+        description: 'JSON list of images: [{"name","context","dockerfile","target"}]'
+        type: string
+        required: true
+      node-version:
+        type: string
+        default: "24"
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  HADOLINT_IMAGE: hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+  SEMGREP_IMAGE: semgrep/semgrep:1.180.0@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0          # full history: a secret deleted later is still leaked
+          persist-credentials: false
+      - name: Install gitleaks (checksum verified)
+        run: |
+          curl -sSfL -o gitleaks.tgz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum --check
+          tar -xzf gitleaks.tgz gitleaks
+      - run: ./gitleaks git . --redact --verbose
+
+  dockerfile-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: hadolint every Dockerfile used by an image
+        env:
+          IMAGES: ${{ inputs.images }}
+        run: |
+          for f in $(echo "$IMAGES" | jq -r '.[].dockerfile' | sort -u); do
+            echo "::group::$f"
+            docker run --rm -i -v "$PWD/.hadolint.yaml:/hadolint.yaml:ro" \
+              "$HADOLINT_IMAGE" hadolint --config /hadolint.yaml - < "$f"
+            echo "::endgroup::"
+          done
+
+  sast:
+    needs: [secrets, dockerfile-lint]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Semgrep (blocks on findings)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src "$SEMGREP_IMAGE" semgrep scan \
+            --config p/default --config p/typescript --config p/nodejs \
+            --metrics=off --error
+
+  dependencies:
+    needs: [secrets, dockerfile-lint]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trivy fs (lockfiles; fixable HIGH/CRITICAL block)
+        run: |
+          touch .trivyignore
+          docker run --rm -v "$PWD:/src" -w /src "$TRIVY_IMAGE" fs \
+            --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+            --ignorefile /src/.trivyignore --exit-code 1 .
+
+  test:
+    name: test (${{ matrix.project }})
+    needs: [secrets, dockerfile-lint]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(inputs.projects) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+      - run: npm ci
+      - run: npm run format:check --if-present
+      - run: npm run lint --if-present
+      - run: npm run typecheck --if-present
+      - run: npm test --if-present
+      - run: npm run build
+
+  image-scan:
+    name: image-scan (${{ matrix.image.name }})
+    needs: [sast, dependencies, test]
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(inputs.images) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build (not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          target: ${{ matrix.image.target }}
+          load: true
+          tags: scan/${{ matrix.image.name }}:pr
+          cache-from: type=gha,scope=${{ matrix.image.name }}-amd64
+      - name: Trivy image (fixable HIGH/CRITICAL block)
+        env:
+          IMAGE_NAME: ${{ matrix.image.name }}
+        run: |
+          touch .trivyignore
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD/.trivyignore:/.trivyignore:ro" "$TRIVY_IMAGE" image \
+            --ignorefile /.trivyignore --ignore-unfixed --severity HIGH,CRITICAL \
+            --exit-code 1 "scan/$IMAGE_NAME:pr"
+
+  all-checks-passed:
+    if: always()
+    needs: [secrets, dockerfile-lint, sast, dependencies, test, image-scan]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail if any stage failed, was cancelled or skipped
+        if: >-
+          contains(needs.*.result, 'failure') ||
+          contains(needs.*.result, 'cancelled') ||
+          contains(needs.*.result, 'skipped')
+        run: exit 1
